@@ -1,0 +1,437 @@
+name: APK Derle
+on:
+  workflow_dispatch:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Proje dosyalarini olustur
+        run: |
+          mkdir -p $(dirname settings.gradle.kts)
+          cat > settings.gradle.kts <<'EOF_HAFIF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "HafifLauncher"
+          include(":app")
+          EOF_HAFIF
+          mkdir -p $(dirname build.gradle.kts)
+          cat > build.gradle.kts <<'EOF_HAFIF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+          }
+          EOF_HAFIF
+          mkdir -p $(dirname gradle.properties)
+          cat > gradle.properties <<'EOF_HAFIF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=false
+          android.nonTransitiveRClass=true
+          EOF_HAFIF
+          mkdir -p $(dirname app/build.gradle.kts)
+          cat > app/build.gradle.kts <<'EOF_HAFIF'
+          plugins {
+              id("com.android.application")
+          }
+
+          android {
+              namespace = "com.hafif.launcher"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.hafif.launcher"
+                  minSdk = 26          // Galaxy A34 Android 13+ ile gelir
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = true
+                      isShrinkResources = true
+                      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+                      // Kendi keystore'unuz yoksa kurulabilsin diye debug anahtarıyla imzalar
+                      signingConfig = signingConfigs.getByName("debug")
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+          }
+          // Bilerek hiçbir bağımlılık yok: AppCompat, Compose, Kotlin stdlib kullanılmıyor.
+          EOF_HAFIF
+          mkdir -p $(dirname app/src/main/AndroidManifest.xml)
+          cat > app/src/main/AndroidManifest.xml <<'EOF_HAFIF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="false"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="Hafif Launcher"
+                  android:theme="@style/AppTheme">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:stateNotNeeded="true"
+                      android:windowSoftInputMode="adjustResize|stateHidden"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF_HAFIF
+          mkdir -p $(dirname app/src/main/res/values/styles.xml)
+          cat > app/src/main/res/values/styles.xml <<'EOF_HAFIF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:Theme.DeviceDefault.Wallpaper.NoTitleBar">
+                  <item name="android:windowShowWallpaper">true</item>
+                  <item name="android:windowBackground">@android:color/transparent</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">@android:color/transparent</item>
+              </style>
+          </resources>
+          EOF_HAFIF
+          mkdir -p $(dirname app/src/main/res/drawable/ic_launcher.xml)
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'EOF_HAFIF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#1F2937"
+                  android:pathData="M54,54m-54,0a54,54 0,1 1,108 0a54,54 0,1 1,-108 0" />
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M30,30h14v14h-14z M64,30h14v14h-14z M30,64h14v14h-14z M64,64h14v14h-14z" />
+          </vector>
+          EOF_HAFIF
+          mkdir -p $(dirname app/src/main/java/com/hafif/launcher/MainActivity.java)
+          cat > app/src/main/java/com/hafif/launcher/MainActivity.java <<'EOF_HAFIF'
+          package com.hafif.launcher;
+
+          import android.app.Activity;
+          import android.app.AlertDialog;
+          import android.content.BroadcastReceiver;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.IntentFilter;
+          import android.content.pm.PackageManager;
+          import android.content.pm.ResolveInfo;
+          import android.graphics.Color;
+          import android.graphics.drawable.Drawable;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
+          import android.text.Editable;
+          import android.text.InputType;
+          import android.text.TextWatcher;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.view.inputmethod.EditorInfo;
+          import android.view.inputmethod.InputMethodManager;
+          import android.widget.AbsListView;
+          import android.widget.BaseAdapter;
+          import android.widget.EditText;
+          import android.widget.GridView;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.TextClock;
+          import android.widget.TextView;
+
+          import java.text.Collator;
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util.List;
+          import java.util.Locale;
+          import java.util.concurrent.ExecutorService;
+          import java.util.concurrent.Executors;
+
+          public class MainActivity extends Activity {
+
+              static class App {
+                  String label, lower, pkg;
+                  ComponentName cn;
+                  Drawable icon;
+              }
+
+              private static final Locale TR = new Locale("tr", "TR");
+
+              private final List<App> all = new ArrayList<>();
+              private final List<App> shown = new ArrayList<>();
+              private final Handler ui = new Handler(Looper.getMainLooper());
+              private final ExecutorService io = Executors.newSingleThreadExecutor();
+
+              private float density;
+              private EditText search;
+              private GridView grid;
+              private BaseAdapter adapter;
+
+              private final BroadcastReceiver pkgReceiver = new BroadcastReceiver() {
+                  @Override public void onReceive(Context c, Intent i) { load(); }
+              };
+
+              private int dp(int v) { return Math.round(v * density); }
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  density = getResources().getDisplayMetrics().density;
+
+                  getWindow().getDecorView().setSystemUiVisibility(
+                          View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                  | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                  | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setBackgroundColor(0x80000000); // duvar kağıdını hafif karartır
+                  root.setOnApplyWindowInsetsListener((v, in) -> {
+                      v.setPadding(dp(8) + in.getSystemWindowInsetLeft(),
+                              in.getSystemWindowInsetTop() + dp(12),
+                              dp(8) + in.getSystemWindowInsetRight(),
+                              in.getSystemWindowInsetBottom());
+                      return in;
+                  });
+
+                  // Saat
+                  TextClock clock = new TextClock(this);
+                  clock.setFormat24Hour("HH:mm");
+                  clock.setFormat12Hour("HH:mm");
+                  clock.setTextSize(56);
+                  clock.setTextColor(Color.WHITE);
+                  clock.setGravity(Gravity.CENTER_HORIZONTAL);
+                  clock.setShadowLayer(6, 0, 2, 0x99000000);
+                  root.addView(clock, new LinearLayout.LayoutParams(-1, -2));
+
+                  // Tarih
+                  TextClock date = new TextClock(this);
+                  date.setFormat24Hour("d MMMM, EEEE");
+                  date.setFormat12Hour("d MMMM, EEEE");
+                  date.setTextSize(16);
+                  date.setTextColor(0xFFDDDDDD);
+                  date.setGravity(Gravity.CENTER_HORIZONTAL);
+                  root.addView(date, new LinearLayout.LayoutParams(-1, -2));
+
+                  // Arama
+                  search = new EditText(this);
+                  search.setHint("Uygulama ara");
+                  search.setHintTextColor(0x99FFFFFF);
+                  search.setTextColor(Color.WHITE);
+                  search.setSingleLine(true);
+                  search.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+                  search.setImeOptions(EditorInfo.IME_ACTION_GO);
+                  search.setBackgroundColor(0x33FFFFFF);
+                  search.setPadding(dp(16), dp(10), dp(16), dp(10));
+                  LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
+                  sp.setMargins(dp(12), dp(16), dp(12), dp(8));
+                  root.addView(search, sp);
+
+                  search.addTextChangedListener(new TextWatcher() {
+                      public void beforeTextChanged(CharSequence s, int a, int c, int d) {}
+                      public void onTextChanged(CharSequence s, int a, int c, int d) {}
+                      public void afterTextChanged(Editable e) { filter(e.toString()); }
+                  });
+                  search.setOnEditorActionListener((v, id, ev) -> {
+                      if (!shown.isEmpty()) launch(shown.get(0));
+                      return true;
+                  });
+
+                  // Uygulama ızgarası
+                  grid = new GridView(this);
+                  grid.setNumColumns(4);
+                  grid.setVerticalSpacing(dp(12));
+                  grid.setSelector(android.R.color.transparent);
+                  grid.setClipToPadding(false);
+                  grid.setPadding(0, dp(8), 0, dp(16));
+                  grid.setVerticalScrollBarEnabled(false);
+                  grid.setOverScrollMode(View.OVER_SCROLL_NEVER);
+                  adapter = new AppAdapter();
+                  grid.setAdapter(adapter);
+                  grid.setOnItemClickListener((p, v, pos, id) -> launch(shown.get(pos)));
+                  grid.setOnItemLongClickListener((p, v, pos, id) -> { options(shown.get(pos)); return true; });
+                  grid.setOnScrollListener(new AbsListView.OnScrollListener() {
+                      public void onScrollStateChanged(AbsListView v, int s) {
+                          if (s == SCROLL_STATE_TOUCH_SCROLL) hideKeyboard();
+                      }
+                      public void onScroll(AbsListView v, int a, int b, int c) {}
+                  });
+                  root.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+                  setContentView(root);
+
+                  IntentFilter f = new IntentFilter();
+                  f.addAction(Intent.ACTION_PACKAGE_ADDED);
+                  f.addAction(Intent.ACTION_PACKAGE_REMOVED);
+                  f.addAction(Intent.ACTION_PACKAGE_CHANGED);
+                  f.addDataScheme("package");
+                  registerReceiver(pkgReceiver, f);
+
+                  load();
+              }
+
+              @Override
+              protected void onNewIntent(Intent intent) {
+                  super.onNewIntent(intent);
+                  // Ana ekran tuşuna basılınca: aramayı temizle, başa dön
+                  if (Intent.ACTION_MAIN.equals(intent.getAction())) {
+                      search.setText("");
+                      hideKeyboard();
+                      grid.smoothScrollToPosition(0);
+                  }
+              }
+
+              @Override
+              @SuppressWarnings("deprecation")
+              public void onBackPressed() { /* ana ekranda geri tuşu bir şey yapmaz */ }
+
+              @Override
+              protected void onDestroy() {
+                  unregisterReceiver(pkgReceiver);
+                  io.shutdownNow();
+                  super.onDestroy();
+              }
+
+              private void hideKeyboard() {
+                  InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                  imm.hideSoftInputFromWindow(search.getWindowToken(), 0);
+                  search.clearFocus();
+              }
+
+              private void load() {
+                  io.execute(() -> {
+                      PackageManager pm = getPackageManager();
+                      Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+                      List<App> r = new ArrayList<>();
+                      for (ResolveInfo ri : pm.queryIntentActivities(q, 0)) {
+                          String pkg = ri.activityInfo.packageName;
+                          if (pkg.equals(getPackageName())) continue;
+                          App a = new App();
+                          a.pkg = pkg;
+                          a.cn = new ComponentName(pkg, ri.activityInfo.name);
+                          a.label = String.valueOf(ri.loadLabel(pm));
+                          a.lower = a.label.toLowerCase(TR);
+                          a.icon = ri.loadIcon(pm);
+                          r.add(a);
+                      }
+                      Collator c = Collator.getInstance(TR);
+                      Collections.sort(r, (x, y) -> c.compare(x.label, y.label));
+                      ui.post(() -> {
+                          all.clear();
+                          all.addAll(r);
+                          filter(search.getText().toString());
+                      });
+                  });
+              }
+
+              private void filter(String q) {
+                  String s = q.trim().toLowerCase(TR);
+                  shown.clear();
+                  for (App a : all) if (s.isEmpty() || a.lower.contains(s)) shown.add(a);
+                  adapter.notifyDataSetChanged();
+              }
+
+              private void launch(App a) {
+                  Intent i = new Intent(Intent.ACTION_MAIN)
+                          .addCategory(Intent.CATEGORY_LAUNCHER)
+                          .setComponent(a.cn)
+                          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                  try {
+                      startActivity(i);
+                      search.setText("");
+                      hideKeyboard();
+                  } catch (Exception ignored) { }
+              }
+
+              private void options(App a) {
+                  new AlertDialog.Builder(this)
+                          .setTitle(a.label)
+                          .setItems(new String[]{"Uygulama bilgisi", "Kaldır"}, (d, which) -> {
+                              Uri u = Uri.parse("package:" + a.pkg);
+                              Intent i = which == 0
+                                      ? new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, u)
+                                      : new Intent(Intent.ACTION_DELETE, u);
+                              try { startActivity(i); } catch (Exception ignored) { }
+                          })
+                          .show();
+              }
+
+              private class AppAdapter extends BaseAdapter {
+                  public int getCount() { return shown.size(); }
+                  public Object getItem(int i) { return shown.get(i); }
+                  public long getItemId(int i) { return i; }
+
+                  public View getView(int pos, View v, ViewGroup parent) {
+                      LinearLayout cell;
+                      ImageView img;
+                      TextView tv;
+                      if (v == null) {
+                          cell = new LinearLayout(MainActivity.this);
+                          cell.setOrientation(LinearLayout.VERTICAL);
+                          cell.setGravity(Gravity.CENTER_HORIZONTAL);
+                          cell.setPadding(dp(2), dp(4), dp(2), dp(4));
+                          img = new ImageView(MainActivity.this);
+                          cell.addView(img, new LinearLayout.LayoutParams(dp(54), dp(54)));
+                          tv = new TextView(MainActivity.this);
+                          tv.setTextColor(Color.WHITE);
+                          tv.setTextSize(12);
+                          tv.setSingleLine(true);
+                          tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                          tv.setGravity(Gravity.CENTER);
+                          tv.setShadowLayer(4, 0, 1, 0xCC000000);
+                          LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+                          lp.topMargin = dp(4);
+                          cell.addView(tv, lp);
+                          v = cell;
+                      }
+                      cell = (LinearLayout) v;
+                      img = (ImageView) cell.getChildAt(0);
+                      tv = (TextView) cell.getChildAt(1);
+                      App a = shown.get(pos);
+                      img.setImageDrawable(a.icon);
+                      tv.setText(a.label);
+                      return v;
+                  }
+              }
+          }
+          EOF_HAFIF
+      - name: Debug anahtari olustur
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+      - name: Derle
+        run: gradle assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HafifLauncher-APK
+          path: app/build/outputs/apk/release/app-release.apk
